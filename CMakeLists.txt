@@ -31,8 +31,14 @@ option (WriteMoreInfo
 option (USE_Plumed
     "Enable interface to plumed for metadynamics")
 
+option(USE_MARCH_NATIVE
+    "Enable -march=native (best performance, NOT portable)" OFF)
+
 option(USE_AVX2
-    "Enable AVX2 instructions" OFF)
+    "Enable AVX2 + FMA instructions (Haswell+, not portable)" OFF)
+
+option(USE_AVX512
+    "Enable AVX-512 instructions (Skylake-X+, not portable)" OFF)
 
 option(USE_BLAS
     "Enable BLAS" OFF)
@@ -56,18 +62,26 @@ option(USE_CUDA
     "Enable CUDA-accelerated GFN-FF (gfnff -gpu cuda, requires CUDA toolkit)" OFF)
 
 if(USE_MKL)
-    if(NOT DEFINED MKL_ROOT)
-        set(MKL_ROOT $ENV{MKL_ROOT})
+    # Support both MKL_ROOT and MKLROOT (environment and CMake variables)
+    if(NOT MKL_ROOT)
+        if(DEFINED ENV{MKL_ROOT})
+            set(MKL_ROOT $ENV{MKL_ROOT})
+        elseif(DEFINED ENV{MKLROOT})
+            set(MKL_ROOT $ENV{MKLROOT})
+        endif()
     endif()
+    if(NOT MKL_ROOT AND DEFINED MKLROOT)
+        set(MKL_ROOT ${MKLROOT})
+    endif()
+
     message(STATUS "MKL_ROOT set to ${MKL_ROOT}")
-    if( MKL_ROOT STREQUAL "")
-        message(FATAL_ERROR "MKL_ROOT not set")
-        message(FATAL_ERROR "Please set MKL_ROOT to the root directory of your MKL installation")
-        message(FATAL_ERROR "For example: export MKL_ROOT=/opt/intel/oneapi/mkl/latest")
-        message(FATAL_ERROR "Or use -DMKL_ROOT=/opt/intel/oneapi/mkl/latest")
+    if(NOT MKL_ROOT OR MKL_ROOT STREQUAL "")
+        message(FATAL_ERROR "MKL_ROOT not set. Please set MKL_ROOT or MKLROOT to the root directory of your MKL installation.\n"
+                            "Examples:\n"
+                            "  export MKL_ROOT=/opt/intel/oneapi/mkl/latest\n"
+                            "  cmake -DMKL_ROOT=/opt/intel/oneapi/mkl/latest ..")
     endif()
     set(MKLROOT ${MKL_ROOT})
-
 endif()
 
 
@@ -242,9 +256,32 @@ else()
 endif(WIN32)
 ENDIF(CMAKE_COMPILER_IS_GNUCXX)
 
-if(USE_AVX2)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2")
-
+# CPU feature flags — safe default: none (portable). Enable for target machine only.
+include(CheckCXXCompilerFlag)
+if(USE_MARCH_NATIVE)
+    check_cxx_compiler_flag("-march=native" COMPILER_SUPPORTS_MARCH_NATIVE)
+    if(COMPILER_SUPPORTS_MARCH_NATIVE)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
+        message(STATUS "CPU: -march=native enabled")
+    else()
+        message(WARNING "-march=native not supported by compiler")
+    endif()
+elseif(USE_AVX512)
+    check_cxx_compiler_flag("-mavx512f" COMPILER_SUPPORTS_AVX512)
+    if(COMPILER_SUPPORTS_AVX512)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx512f -mavx512vl -mavx512dq -mfma")
+        message(STATUS "CPU: AVX-512 enabled")
+    else()
+        message(WARNING "AVX-512 not supported by compiler")
+    endif()
+elseif(USE_AVX2)
+    check_cxx_compiler_flag("-mavx2" COMPILER_SUPPORTS_AVX2)
+    if(COMPILER_SUPPORTS_AVX2)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma")
+        message(STATUS "CPU: AVX2 + FMA enabled")
+    else()
+        message(WARNING "AVX2 not supported by compiler")
+    endif()
 endif()
 
 if(NOT EXISTS ${PROJECT_SOURCE_DIR}/external/json.hpp)
