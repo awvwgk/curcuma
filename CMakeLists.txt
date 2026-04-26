@@ -775,16 +775,42 @@ if(USE_D4)
 endif()
 
 if(USE_Plumed)
-    # Build plumed2 from source via FetchContent (plumed2 >= 2.8 has CMake support)
-    FetchContent_MakeAvailable(plumed2)
-    # plumed2 CMake target is 'plumed' — link to curcuma_core
-    if(TARGET plumed)
-        target_link_libraries(curcuma_core plumed)
-        message(STATUS "Plumed2 built from source via FetchContent")
-    else()
-        message(FATAL_ERROR "Plumed2 CMake target 'plumed' not found after FetchContent_MakeAvailable. "
-                            "Check external/plumed2/CMakeLists.txt for the correct target name.")
+    # Build plumed2 from source via autotools (FetchContent only fetches, does not add_subdirectory)
+    FetchContent_GetProperties(plumed2)
+    if(NOT plumed2_POPULATED)
+        FetchContent_Populate(plumed2)
     endif()
+
+    set(PLUMED2_SOURCE_DIR ${CMAKE_SOURCE_DIR}/external/plumed2)
+    set(PLUMED2_LIB        ${PLUMED2_SOURCE_DIR}/src/lib/libplumed.so)
+
+    include(ExternalProject)
+    ExternalProject_Add(plumed2_build
+        SOURCE_DIR        ${PLUMED2_SOURCE_DIR}
+        BINARY_DIR        ${PLUMED2_SOURCE_DIR}
+        CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env "CXXFLAGS=-fpermissive -O3" ${PLUMED2_SOURCE_DIR}/configure --disable-python
+        BUILD_COMMAND     make -C src/lib -j
+        INSTALL_COMMAND   ""
+        BUILD_BYPRODUCTS  ${PLUMED2_LIB}
+    )
+
+    add_custom_target(plumed2_patch_rpath
+        COMMAND patchelf --set-rpath '$$ORIGIN' ${PLUMED2_LIB}
+        DEPENDS plumed2_build
+        COMMENT "Patching RPATH of libplumed.so"
+    )
+
+    add_library(plumed UNKNOWN IMPORTED GLOBAL)
+    set_target_properties(plumed PROPERTIES
+        IMPORTED_LOCATION             ${PLUMED2_LIB}
+        INTERFACE_INCLUDE_DIRECTORIES ${PLUMED2_SOURCE_DIR}/src/wrapper
+    )
+    add_dependencies(plumed plumed2_build plumed2_patch_rpath)
+
+    target_link_libraries(curcuma_core plumed)
+    target_compile_definitions(curcuma_core PRIVATE USE_Plumed)
+
+    message(STATUS "PLUMED2: external project configured, library expected at ${PLUMED2_LIB}")
 endif()
 
 # Claude Generated (March 2026): CUDA-accelerated GFN-FF (gfnff -gpu cuda)
